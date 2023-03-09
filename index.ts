@@ -9,16 +9,24 @@ const labels = [
   ["description", "Description"],
   ["body", "Body"],
   ["priorityLabel", "Priority"],
+  ["asignee?.name", "Asignee"],
+  ["project?.name", "Project"],
+  ["state?.name", "State"],
 ];
 
 const handler: Handler = async (request: Request): Promise<Response> => {
   const message = await request.json();
+	console.log(JSON.stringify(request.headers.entries()))
   console.log("New request: ", JSON.stringify(message));
 
   const fields = [];
   for (const [field, label] of labels)
-    if (message.data[field])
-      fields.push({ name: label, value: message.data[field], inline: false });
+    if (eval(`message.data.${field}`))
+      fields.push({
+        name: label,
+        value: eval(`message.data.${field}`),
+        inline: true,
+      });
 
   let body;
   try {
@@ -31,6 +39,7 @@ const handler: Handler = async (request: Request): Promise<Response> => {
             {
               color: 6021786,
               title: `${message.type} ${message.action}d on ${message.data.team.name}'s Linear`,
+							url: message.url,
               fields,
             },
           ],
