@@ -3,22 +3,23 @@ import "https://deno.land/x/dotenv@v3.2.2/load.ts";
 
 const port = 8080;
 const webhook = Deno.env.get("DISCORD_WEBHOOK_URL");
+// Array of [<field to scan Linear webhook for>, <label for that field in a Discord message>]. Ordered from top to bottom.
 const labels = [
 	['title', 'Title'],
 	['description', 'Description'],
 	['body', 'Body'],
 	['priorityLabel', 'Priority'],
-	['assignee.name', 'Asignee'],
 ]
 
 const handler: Handler = async (request: Request): Promise<Response> => {
   const message = await request.json();
-	let body;
-	const fields = []
+	console.log('New request: ', JSON.stringify(message))
 
+	const fields = []
 	for(const [field, label] of labels)
 		if(message.data[field]) fields.push({name: label, value: message.data[field], inline: false})
 
+	let body;
   try {
     if (webhook) {
       body = await fetch(webhook, {
@@ -42,5 +43,5 @@ const handler: Handler = async (request: Request): Promise<Response> => {
   return new Response(body, { status: 200 });
 };
 
-console.log(`HTTP webserver running. Access it at: http://localhost:8080/`);
+console.log(`HTTP server running on port ${port}`);
 await serve(handler, { port });
