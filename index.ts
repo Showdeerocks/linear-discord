@@ -16,17 +16,19 @@ const labels = [
 
 const handler: Handler = async (request: Request): Promise<Response> => {
   const message = await request.json();
-	console.log(JSON.stringify(request.headers.entries()))
+  console.log(JSON.stringify(request.headers.entries()));
   console.log("New request: ", JSON.stringify(message));
 
   const fields = [];
-  for (const [field, label] of labels)
-    if (eval(`message.data.${field}`))
+  for (const [field, label] of labels) {
+    const fieldData = eval(`message.data.${field}`);
+    if (fieldData)
       fields.push({
         name: label,
-        value: eval(`message.data.${field}`),
-        inline: true,
+        value: fieldData,
+        inline: fieldData.length > 50 ? false : true,
       });
+  }
 
   let body;
   try {
@@ -39,7 +41,7 @@ const handler: Handler = async (request: Request): Promise<Response> => {
             {
               color: 6021786,
               title: `${message.type} ${message.action}d on ${message.data.team.name}'s Linear`,
-							url: message.url,
+              url: message.url,
               fields,
             },
           ],
