@@ -4,7 +4,6 @@ import "https://deno.land/x/dotenv@v3.2.2/load.ts";
 const port = 8080;
 const webhook = Deno.env.get("DISCORD_WEBHOOK_URL");
 
-// Emoji configuration
 const EMOJIS = {
   actions: {
     create: '🆕',
@@ -27,13 +26,12 @@ const EMOJIS = {
     default: '📋'
   },
   unknowns: {
-    user: '👤', // Neutral person emoji for unknown users
-    team: '❔', // Question mark emoji for unknown teams
-    default: '〰️' // Wave dash for unknown/fallback cases
+    user: '👤',
+    team: '❔',
+    default: '〰️'
   }
 };
 
-// Fields to map from Linear to Discord
 const labels = [
   ["title", "📝 Title"],
   ["description", "📄 Description"],
@@ -44,7 +42,6 @@ const labels = [
   ["state?.name", "🔄 State"],
 ];
 
-// Helper to safely access nested properties
 function getFieldData(obj: any, path: string): any {
   return path.split('?.')
     .reduce((acc, part) => acc?.[part], obj);
@@ -55,11 +52,12 @@ const handler: Handler = async (request: Request): Promise<Response> => {
     const message = await request.json();
     console.log("New request:", JSON.stringify(message, null, 2));
 
-    // Enhanced unknown handling
+    // Handle unknown team
     const teamName = message.data?.team?.name 
       ? `${message.data.team.name}`
       : `${EMOJIS.unknowns.team} Unknown Team`;
-    
+
+    // Handle unknown user
     const author = message.createdBy?.name 
       ? `${message.createdBy.name}`
       : `${EMOJIS.unknowns.user} Unknown User`;
@@ -68,33 +66,31 @@ const handler: Handler = async (request: Request): Promise<Response> => {
       ? message.createdBy.avatarUrl
       : `https://avatars.dicebear.com/api/identicon/${Date.now()}.svg`;
 
-    // Action handling with fallback
-    const actionPastTense = message.action ? `${message.action}d` : 'processed';
-    const actionEmoji = message.action 
-      ? EMOJIS.actions[message.action] || EMOJIS.actions.default
-      : EMOJIS.unknowns.default;
-
-    // Build fields with enhanced unknown checks
+    // Build fields with enhanced handling
     const fields = [];
     for (const [field, label] of labels) {
       const fieldData = getFieldData(message.data, field);
       if (fieldData) {
         let formattedValue = fieldData.toString();
-        
-        // Add unknown indicators for critical fields
-        if (field === 'assignee?.name' && formattedValue === 'undefined') {
-          formattedValue = `${EMOJIS.unknowns.user} Unassigned`;
-        }
-        if (field === 'project?.name' && formattedValue === 'undefined') {
-          formattedValue = `${EMOJIS.unknowns.default} No Project`;
-        }
 
-        // Add emojis for specific fields
-        if (field === 'priorityLabel') {
-          formattedValue = `${EMOJIS.priority[fieldData] || EMOJIS.priority.default} ${formattedValue}`;
-        }
-        if (field === 'state?.name') {
-          formattedValue = `${EMOJIS.status[fieldData] || EMOJIS.status.default} ${formattedValue}`;
+        // Special formatting for specific fields
+        switch (field) {
+          case 'priorityLabel':
+            formattedValue = `${EMOJIS.priority[fieldData] || EMOJIS.priority.default} ${formattedValue}`;
+            break;
+          case 'state?.name':
+            formattedValue = `${EMOJIS.status[fieldData] || EMOJIS.status.default} ${formattedValue}`;
+            break;
+          case 'assignee?.name':
+            formattedValue = formattedValue === 'undefined' 
+              ? `${EMOJIS.unknowns.user} Unassigned`
+              : `👤 ${formattedValue}`;
+            break;
+          case 'project?.name':
+            formattedValue = formattedValue === 'undefined'
+              ? `${EMOJIS.unknowns.default} No Project`
+              : `📂 ${formattedValue}`;
+            break;
         }
 
         fields.push({
@@ -105,14 +101,19 @@ const handler: Handler = async (request: Request): Promise<Response> => {
       }
     }
 
-    // Enhanced title construction
+    // Handle unknown action/type
+    const actionPastTense = message.action ? `${message.action}d` : 'processed';
+    const actionEmoji = message.action 
+      ? EMOJIS.actions[message.action] || EMOJIS.actions.default
+      : EMOJIS.unknowns.default;
+
     const embedTitle = message.type 
       ? `${actionEmoji} ${message.type} ${actionPastTense} in ${teamName}`
       : `${EMOJIS.unknowns.default} Unknown Activity in ${teamName}`;
 
     const discordPayload = {
       embeds: [{
-        color: 0x5F6AD4, // Linear's brand color
+        color: 0x5F6AD4,
         title: embedTitle,
         url: message.url || undefined,
         author: {
