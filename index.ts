@@ -5,6 +5,12 @@ const port = 8080;
 const webhook = Deno.env.get("DISCORD_WEBHOOK_URL");
 
 const EMOJIS = {
+  types: {
+    Issue: '📌',
+    Comment: '💬',
+    Reaction: '🎯',
+    default: '🔔'
+  },
   actions: {
     create: '🆕',
     update: '✏️',
@@ -24,117 +30,116 @@ const EMOJIS = {
     InProgress: '🚧',
     Review: '👀',
     default: '📋'
-  },
-  unknowns: {
-    user: '👤',
-    team: '❔',
-    default: '〰️'
   }
 };
-
-const labels = [
-  ["title", "📝 Title"],
-  ["description", "📄 Description"],
-  ["body", "📋 Body"],
-  ["priorityLabel", "🚩 Priority"],
-  ["assignee?.name", "👤 Assignee"],
-  ["project?.name", "📂 Project"],
-  ["state?.name", "🔄 State"],
-];
-
-function getFieldData(obj: any, path: string): any {
-  return path.split('?.')
-    .reduce((acc, part) => acc?.[part], obj);
-}
 
 const handler: Handler = async (request: Request): Promise<Response> => {
   try {
     const message = await request.json();
     console.log("New request:", JSON.stringify(message, null, 2));
 
-    // Handle unknown team
-    const teamName = message.data?.team?.name 
-      ? `${message.data.team.name}`
-      : `${EMOJIS.unknowns.team} Unknown Team`;
+    // Get event type and action
+    const eventType = message.type || 'Unknown';
+    const action = message.action || 'create';
 
-    // Handle unknown user
-    const author = message.createdBy?.name 
-      ? `${message.createdBy.name}`
-      : `${EMOJIS.unknowns.user} Unknown User`;
-    
-    const authorAvatar = message.createdBy?.avatarUrl 
-      ? message.createdBy.avatarUrl
-      : `https://avatars.dicebear.com/api/identicon/${Date.now()}.svg`;
+    // Get user information from multiple possible locations
+    const getUserInfo = () => {
+      return {
+        name: message.createdBy?.name || 
+              message.user?.name || 
+              message.actor?.name || 
+              "Unknown User",
+        avatar: message.createdBy?.avatarUrl || 
+                message.user?.avatarUrl || 
+                message.actor?.avatarUrl || 
+                "https://cdn.linearicons.com/free/110/linear-logo.png"
+      };
+    };
 
-    // Build fields with enhanced handling
-    const fields = [];
-    for (const [field, label] of labels) {
-      const fieldData = getFieldData(message.data, field);
-      if (fieldData) {
-        let formattedValue = fieldData.toString();
+    // Get team name from multiple possible locations
+    const getTeamInfo = () => {
+      return message.data?.team?.name || 
+             message.data?.issue?.team?.name || 
+             message.data?.project?.team?.name || 
+             "Unknown Team";
+    };
 
-        // Special formatting for specific fields
-        switch (field) {
-          case 'priorityLabel':
-            formattedValue = `${EMOJIS.priority[fieldData] || EMOJIS.priority.default} ${formattedValue}`;
-            break;
-          case 'state?.name':
-            formattedValue = `${EMOJIS.status[fieldData] || EMOJIS.status.default} ${formattedValue}`;
-            break;
-          case 'assignee?.name':
-            formattedValue = formattedValue === 'undefined' 
-              ? `${EMOJIS.unknowns.user} Unassigned`
-              : `👤 ${formattedValue}`;
-            break;
-          case 'project?.name':
-            formattedValue = formattedValue === 'undefined'
-              ? `${EMOJIS.unknowns.default} No Project`
-              : `📂 ${formattedValue}`;
-            break;
-        }
+    // Build dynamic fields based on event type
+    const buildFields = () => {
+      const fields = [];
+      const baseData = message.data || {};
 
-        fields.push({
-          name: label,
-          value: formattedValue,
-          inline: formattedValue.length <= 30
-        });
+      // Common fields
+      if (baseData.title) fields.push({ name: '📝 Title', value: baseData.title });
+      if (baseData.body) fields.push({ name: '📄 Body', value: baseData.body });
+
+      // Reaction-specific fields
+      if (eventType === 'Reaction') {
+        fields.push(
+          { name: '🎯 Emoji', value: baseData.emoji || 'Unknown', inline: true },
+          { name: '📌 Parent', value: `[${baseData.parent?.title}](${baseData.parent?.url})` || 'Unknown', inline: true }
+        );
       }
-    }
 
-    // Handle unknown action/type
-    const actionPastTense = message.action ? `${message.action}d` : 'processed';
-    const actionEmoji = message.action 
-      ? EMOJIS.actions[message.action] || EMOJIS.actions.default
-      : EMOJIS.unknowns.default;
+      // Comment-specific fields
+      if (eventType === 'Comment') {
+        fields.push(
+          { name: '📌 Issue', value: `[${baseData.issue?.title}](${baseData.issue?.url})` || 'Unknown' }
+        );
+      }
 
-    const embedTitle = message.type 
-      ? `${actionEmoji} ${message.type} ${actionPastTense} in ${teamName}`
-      : `${EMOJIS.unknowns.default} Unknown Activity in ${teamName}`;
+      // Issue-specific fields
+      if (eventType === 'Issue') {
+        if (baseData.priorityLabel) {
+          fields.push({
+            name: '🚩 Priority',
+            value: `${EMOJIS.priority[baseData.priorityLabel] || EMOJIS.priority.default} ${baseData.priorityLabel}`,
+            inline: true
+          });
+        }
+        if (baseData.state?.name) {
+          fields.push({
+            name: '🔄 State',
+            value: `${EMOJIS.status[baseData.state.name] || EMOJIS.status.default} ${baseData.state.name}`,
+            inline: true
+          });
+        }
+        if (baseData.assignee?.name) {
+          fields.push({ name: '👤 Assignee', value: baseData.assignee.name, inline: true });
+        }
+      }
 
+      return fields.length > 0 ? fields : [{
+        name: 'ℹ️ Details',
+        value: 'No additional information available'
+      }];
+    };
+
+    // Build the embed title
+    const { name: userName, avatar: userAvatar } = getUserInfo();
+    const teamName = getTeamInfo();
+    const typeEmoji = EMOJIS.types[eventType] || EMOJIS.types.default;
+    const actionEmoji = EMOJIS.actions[action] || EMOJIS.actions.default;
+
+    const embedTitle = `${typeEmoji} ${eventType} ${action}d in ${teamName}`;
+
+    // Construct Discord payload
     const discordPayload = {
       embeds: [{
         color: 0x5F6AD4,
         title: embedTitle,
-        url: message.url || undefined,
+        url: message.url || message.data?.url,
         author: {
-          name: author.startsWith(EMOJIS.unknowns.user) 
-            ? `Triggered by ${author}` 
-            : `👤 ${author}`,
-          icon_url: authorAvatar
+          name: `Triggered by ${userName}`,
+          icon_url: userAvatar
         },
-        fields: fields.length > 0 ? fields : [{
-          name: `${EMOJIS.unknowns.default} No Details`,
-          value: "Could not retrieve issue information",
-          inline: false
-        }],
+        fields: buildFields(),
         timestamp: new Date().toISOString(),
         footer: {
-          text: teamName.includes("Unknown") 
-            ? "Unknown Team Activity" 
-            : "Linear → Discord Webhook",
+          text: `Linear • ${teamName}`,
           icon_url: "https://cdn.linearicons.com/free/110/linear-logo.png"
         }
-      }],
+      }]
     };
 
     console.log("Sending to Discord:", JSON.stringify(discordPayload, null, 2));
