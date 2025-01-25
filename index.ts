@@ -1,43 +1,60 @@
 import { Handler, serve } from "https://deno.land/std@0.178.0/http/server.ts";
 import "https://deno.land/x/dotenv@v3.2.2/load.ts";
 
-const port = 8080;
+const port = parseInt(Deno.env.get("PORT") || "8080");
 const webhook = Deno.env.get("DISCORD_WEBHOOK_URL");
 
 const labels = [
+  ["identifier", "Issue ID"],
   ["title", "Title"],
   ["description", "Description"],
-  ["body", "Body"],
   ["priorityLabel", "Priority"],
-  ["assignee?.name", "Assignee"], // Corrected typo
-  ["project?.name", "Project"],
   ["state?.name", "State"],
+  ["assignee?.name", "Assignee"],
+  ["labels", "Labels"],
+  ["comment?.body", "Comment"],
 ];
 
-// Safely access nested properties
+const priorityColors: Record<string, number> = {
+  "Urgent": 0xFF0000,
+  "High": 0xFFA500,
+  "Medium": 0xFFFF00,
+  "Low": 0x00FF00,
+};
+
+const actionPastTense: Record<string, string> = {
+  "create": "created",
+  "update": "updated",
+  "delete": "deleted",
+  "comment": "commented",
+};
+
 function getFieldData(obj: any, path: string): any {
-  return path.split('?.')
-    .reduce((acc, part) => acc?.[part], obj);
+  return path.split(/\.?\?\./g).reduce((acc, part) => acc?.[part], obj);
+}
+
+function formatFieldValue(data: any): string {
+  if (Array.isArray(data)) return data.map((item) => item.name || item).join(", ");
+  if (data && typeof data === "object") return JSON.stringify(data).substring(0, 1000);
+  return data?.toString() || "";
 }
 
 const handler: Handler = async (request: Request): Promise<Response> => {
   try {
     const message = await request.json();
-    console.log("New request:", JSON.stringify(message, null, 2));
-
+    
     const fields = [];
     for (const [field, label] of labels) {
       const fieldData = getFieldData(message.data, field);
       if (fieldData) {
         fields.push({
           name: label,
-          value: fieldData.toString(),
-          inline: fieldData.toString().length <= 50,
+          value: formatFieldValue(fieldData).substring(0, 1024),
+          inline: !["Description", "Comment", "Labels"].includes(label),
         });
       }
     }
 
-    // Ensure fields is not empty
     if (fields.length === 0) {
       fields.push({
         name: "Details",
@@ -46,23 +63,22 @@ const handler: Handler = async (request: Request): Promise<Response> => {
       });
     }
 
-    const teamName = message.data?.team?.name || "Unknown Team";
-    const actionPastTense = message.action ? `${message.action}d` : "processed";
-    const embedTitle = `${message.type} ${actionPastTense} on ${teamName}'s Linear`;
+    const priority = getFieldData(message.data, "priorityLabel");
+    const color = priorityColors[priority] || 0x5BE0DA;
+    const action = actionPastTense[message.action] || `${message.action}d`;
+    const teamName = getFieldData(message.data, "team?.name") || "Unknown Team";
 
     const discordPayload = {
       embeds: [{
-        color: 6021786,
-        title: embedTitle,
+        color: color,
+        title: `${message.type} ${action} on ${teamName}'s Linear`,
         url: message.url,
         fields: fields,
       }],
     };
 
-    console.log("Sending to Discord:", JSON.stringify(discordPayload, null, 2));
-
-    if (!webhook) throw new Error("DISCORD_WEBHOOK_URL is not set.");
-
+    if (!webhook) throw new Error("DISCORD_WEBHOOK_URL not set");
+    
     const discordResponse = await fetch(webhook, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -70,17 +86,12 @@ const handler: Handler = async (request: Request): Promise<Response> => {
     });
 
     const responseBody = await discordResponse.text();
-    if (!discordResponse.ok) {
-      throw new Error(`Discord error: ${responseBody}`);
-    }
-
-    return new Response(`Message sent to Discord: ${responseBody}`, { status: 200 });
+    return new Response(`Discord response: ${responseBody}`, { status: 200 });
 
   } catch (e) {
-    console.error("Error handling request:", e);
+    console.error(e);
     return new Response(`Error: ${e.message}`, { status: 400 });
   }
 };
 
-console.log(`HTTP server running on port ${port}`);
 await serve(handler, { port });
