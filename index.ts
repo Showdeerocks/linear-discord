@@ -25,9 +25,15 @@ const EMOJIS = {
     InProgress: '🚧',
     Review: '👀',
     default: '📋'
+  },
+  unknowns: {
+    user: '👤', // Neutral person emoji for unknown users
+    team: '❔', // Question mark emoji for unknown teams
+    default: '〰️' // Wave dash for unknown/fallback cases
   }
 };
 
+// Fields to map from Linear to Discord
 const labels = [
   ["title", "📝 Title"],
   ["description", "📄 Description"],
@@ -38,6 +44,7 @@ const labels = [
   ["state?.name", "🔄 State"],
 ];
 
+// Helper to safely access nested properties
 function getFieldData(obj: any, path: string): any {
   return path.split('?.')
     .reduce((acc, part) => acc?.[part], obj);
@@ -48,13 +55,40 @@ const handler: Handler = async (request: Request): Promise<Response> => {
     const message = await request.json();
     console.log("New request:", JSON.stringify(message, null, 2));
 
-    // Build fields with emojis
+    // Enhanced unknown handling
+    const teamName = message.data?.team?.name 
+      ? `${message.data.team.name}`
+      : `${EMOJIS.unknowns.team} Unknown Team`;
+    
+    const author = message.createdBy?.name 
+      ? `${message.createdBy.name}`
+      : `${EMOJIS.unknowns.user} Unknown User`;
+    
+    const authorAvatar = message.createdBy?.avatarUrl 
+      ? message.createdBy.avatarUrl
+      : `https://avatars.dicebear.com/api/identicon/${Date.now()}.svg`;
+
+    // Action handling with fallback
+    const actionPastTense = message.action ? `${message.action}d` : 'processed';
+    const actionEmoji = message.action 
+      ? EMOJIS.actions[message.action] || EMOJIS.actions.default
+      : EMOJIS.unknowns.default;
+
+    // Build fields with enhanced unknown checks
     const fields = [];
     for (const [field, label] of labels) {
       const fieldData = getFieldData(message.data, field);
       if (fieldData) {
         let formattedValue = fieldData.toString();
         
+        // Add unknown indicators for critical fields
+        if (field === 'assignee?.name' && formattedValue === 'undefined') {
+          formattedValue = `${EMOJIS.unknowns.user} Unassigned`;
+        }
+        if (field === 'project?.name' && formattedValue === 'undefined') {
+          formattedValue = `${EMOJIS.unknowns.default} No Project`;
+        }
+
         // Add emojis for specific fields
         if (field === 'priorityLabel') {
           formattedValue = `${EMOJIS.priority[fieldData] || EMOJIS.priority.default} ${formattedValue}`;
@@ -71,28 +105,32 @@ const handler: Handler = async (request: Request): Promise<Response> => {
       }
     }
 
-    // Build main title with action emoji
-    const actionEmoji = EMOJIS.actions[message.action] || EMOJIS.actions.default;
-    const teamName = message.data?.team?.name || "Unknown Team";
-    const embedTitle = `${actionEmoji} ${message.type} ${message.action}d in ${teamName}`;
-
-    // Build author information
-    const author = message.createdBy?.name || "Unknown User";
-    const authorAvatar = message.createdBy?.avatarUrl || "https://cdn.linearicons.com/free/110/linear-logo.png";
+    // Enhanced title construction
+    const embedTitle = message.type 
+      ? `${actionEmoji} ${message.type} ${actionPastTense} in ${teamName}`
+      : `${EMOJIS.unknowns.default} Unknown Activity in ${teamName}`;
 
     const discordPayload = {
       embeds: [{
         color: 0x5F6AD4, // Linear's brand color
         title: embedTitle,
-        url: message.url,
+        url: message.url || undefined,
         author: {
-          name: `Triggered by ${author}`,
+          name: author.startsWith(EMOJIS.unknowns.user) 
+            ? `Triggered by ${author}` 
+            : `👤 ${author}`,
           icon_url: authorAvatar
         },
-        fields: fields,
+        fields: fields.length > 0 ? fields : [{
+          name: `${EMOJIS.unknowns.default} No Details`,
+          value: "Could not retrieve issue information",
+          inline: false
+        }],
         timestamp: new Date().toISOString(),
         footer: {
-          text: "Linear → Discord Webhook",
+          text: teamName.includes("Unknown") 
+            ? "Unknown Team Activity" 
+            : "Linear → Discord Webhook",
           icon_url: "https://cdn.linearicons.com/free/110/linear-logo.png"
         }
       }],
